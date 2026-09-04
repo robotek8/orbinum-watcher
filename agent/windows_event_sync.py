@@ -18,6 +18,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import asdict
@@ -39,6 +40,7 @@ def load_report_module(path: Path):
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load stress event report: {path}")
     mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     return mod
 
