@@ -1,0 +1,16 @@
+services:
+  orbinum-web:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: orbinum-web
+    restart: unless-stopped
+    environment:
+      ORBINUM_WEB_HOST: 0.0.0.0
+      ORBINUM_WEB_PORT: "8787"
+      ORBINUM_DB: /data/uptime.db
+      ORBINUM_VALIDATOR_NAME: robotek8-orbinum
+    volumes:
+      - /var/lib/orbinum-monitor:/data:ro
+    expose:
+      - "8787"
