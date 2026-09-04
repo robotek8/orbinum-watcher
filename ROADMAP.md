@@ -36,6 +36,8 @@
 - [x] Atomic event snapshot upload
 - [x] Stress/load events merged into dashboard Incident history
 - [x] Expandable event metrics and recovery context
+- [x] End-to-end synthetic event validation through the production path
+- [x] Compact Incident history layout without horizontal scrolling
 
 ## v0.3 — Better observability
 
