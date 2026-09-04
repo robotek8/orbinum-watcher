@@ -3,7 +3,8 @@
 
 This script is read-only with respect to the validator, Docker, tunnels and the
 telemetry database. It analyzes the local telemetry SQLite DB, builds a compact
-JSON snapshot, and can upload that snapshot over the already-existing SSH path.
+JSON snapshot, and can upload that snapshot through an isolated SFTP-only
+account.
 
 The remote write is atomic: events.json.tmp is uploaded first and then renamed
 to events.json. If upload fails, the previous remote snapshot stays intact.
@@ -29,9 +30,9 @@ DEFAULT_ROOT = Path(r"C:\OrbinumWatcher")
 DEFAULT_DB = Path(r"C:\ProgramData\OrbinumWatcher\telemetry.db")
 DEFAULT_REPORT = DEFAULT_ROOT / "analysis" / "stress_event_report.py"
 DEFAULT_HOST = os.getenv("ORBINUM_EVENT_HOST", "169.58.246.105")
-DEFAULT_USER = os.getenv("ORBINUM_EVENT_USER", "orbinum-tunnel")
+DEFAULT_USER = os.getenv("ORBINUM_EVENT_USER", "orbinum-events")
 DEFAULT_KEY = Path(os.getenv("ORBINUM_EVENT_SSH_KEY", str(Path.home() / ".ssh" / "orbinum_tunnel")))
-DEFAULT_REMOTE_DIR = os.getenv("ORBINUM_EVENT_REMOTE_DIR", "orbinum-events")
+DEFAULT_REMOTE_DIR = os.getenv("ORBINUM_EVENT_REMOTE_DIR", "upload")
 VALIDATOR = os.getenv("ORBINUM_VALIDATOR_NAME", "robotek8-orbinum")
 
 
@@ -108,17 +109,7 @@ def build_snapshot(report_module, db_path: Path, seconds: int) -> dict[str, Any]
     }
 
 
-def ssh_base(key: Path) -> list[str]:
-    return [
-        "-i", str(key),
-        "-o", "BatchMode=yes",
-        "-o", "ConnectTimeout=8",
-        "-o", "ServerAliveInterval=15",
-        "-o", "ServerAliveCountMax=2",
-    ]
-
-
-def run(cmd: list[str], timeout: float = 20.0) -> str:
+def run(cmd: list[str], timeout: float = 30.0) -> str:
     cp = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
     if cp.returncode != 0:
         err = (cp.stderr or cp.stdout or "command failed").strip()
@@ -126,20 +117,72 @@ def run(cmd: list[str], timeout: float = 20.0) -> str:
     return (cp.stdout or "").strip()
 
 
-def upload(snapshot_path: Path, host: str, user: str, key: Path, remote_dir: str) -> None:
+def upload_sftp(snapshot_path: Path, host: str, user: str, key: Path, remote_dir: str) -> None:
+    """Upload through the dedicated internal-sftp account; no remote shell needed."""
+    DEFAULT_ROOT.mkdir(parents=True, exist_ok=True)
     target = f"{user}@{host}"
-    base = ssh_base(key)
+    remote_base = "/" + remote_dir.strip("/")
+    remote_tmp = f"{remote_base}/events.json.tmp"
+    remote_final = f"{remote_base}/events.json"
+    local = snapshot_path.resolve().as_posix().replace('"', '\\"')
 
-    run(["ssh.exe", *base, target, f"mkdir -p ~/{remote_dir}"])
-    run([
-        "scp.exe", *base,
-        str(snapshot_path),
-        f"{target}:~/{remote_dir}/events.json.tmp",
-    ])
-    run([
-        "ssh.exe", *base, target,
-        f"mv ~/{remote_dir}/events.json.tmp ~/{remote_dir}/events.json",
-    ])
+    batch_text = (
+        f'put "{local}" {remote_tmp}\n'
+        f'rename {remote_tmp} {remote_final}\n'
+        'bye\n'
+    )
+    fd, batch_name = tempfile.mkstemp(prefix="orbinum-sftp-", suffix=".txt", dir=DEFAULT_ROOT)
+    os.close(fd)
+    batch_path = Path(batch_name)
+    try:
+        batch_path.write_text(batch_text, encoding="ascii")
+        run([
+            "sftp.exe",
+            "-i", str(key),
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=8",
+            "-b", str(batch_path),
+            target,
+        ])
+    finally:
+        try:
+            batch_path.unlink()
+        except OSError:
+            pass
+
+
+def write_snapshot(text: str, output: Path | None) -> tuple[Path, bool]:
+    """Return a local snapshot path and whether it should be deleted afterwards."""
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(text + "\n", encoding="utf-8")
+        return output, False
+
+    DEFAULT_ROOT.mkdir(parents=True, exist_ok=True)
+    path = DEFAULT_ROOT / "events-sync.json"
+    tmp = DEFAULT_ROOT / "events-sync.json.tmp"
+    tmp.write_text(text + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+    return path, False
+
+
+def perform_once(args, report) -> dict[str, Any]:
+    snapshot = build_snapshot(report, args.db, args.seconds)
+    text = json.dumps(snapshot, ensure_ascii=False, indent=2)
+    source, _ = write_snapshot(text, args.output)
+
+    if args.upload:
+        if not args.key.exists():
+            raise FileNotFoundError(f"SSH key not found: {args.key}")
+        upload_sftp(source, args.host, args.user, args.key, args.remote_dir)
+
+    if not args.quiet:
+        print(f"validator: {snapshot['validator']}")
+        print(f"source sample age: {snapshot['source_sample_age_s']}s")
+        print(f"events exported: {len(snapshot['events'])}")
+        if args.upload:
+            print(f"uploaded: {args.user}@{args.host}:/{args.remote_dir.strip('/')}/events.json")
+    return snapshot
 
 
 def main() -> int:
@@ -153,45 +196,23 @@ def main() -> int:
     ap.add_argument("--user", default=DEFAULT_USER)
     ap.add_argument("--key", type=Path, default=DEFAULT_KEY)
     ap.add_argument("--remote-dir", default=DEFAULT_REMOTE_DIR)
+    ap.add_argument("--loop", action="store_true", help="repeat continuously")
+    ap.add_argument("--interval", type=int, default=30, help="seconds between loop iterations")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
     report = load_report_module(args.report)
-    snapshot = build_snapshot(report, args.db, args.seconds)
-    text = json.dumps(snapshot, ensure_ascii=False, indent=2)
 
-    if args.output:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(text + "\n", encoding="utf-8")
-
-    temp_path: Path | None = None
-    try:
-        if args.upload:
-            if not args.key.exists():
-                raise FileNotFoundError(f"SSH key not found: {args.key}")
-            if args.output:
-                source = args.output
-            else:
-                fd, name = tempfile.mkstemp(prefix="orbinum-events-", suffix=".json")
-                os.close(fd)
-                temp_path = Path(name)
-                temp_path.write_text(text + "\n", encoding="utf-8")
-                source = temp_path
-            upload(source, args.host, args.user, args.key, args.remote_dir)
-
-        if not args.quiet:
-            print(f"validator: {snapshot['validator']}")
-            print(f"source sample age: {snapshot['source_sample_age_s']}s")
-            print(f"events exported: {len(snapshot['events'])}")
-            if args.upload:
-                print(f"uploaded: {args.user}@{args.host}:~/{args.remote_dir}/events.json")
+    if not args.loop:
+        perform_once(args, report)
         return 0
-    finally:
-        if temp_path is not None:
-            try:
-                temp_path.unlink()
-            except OSError:
-                pass
+
+    while True:
+        try:
+            perform_once(args, report)
+        except Exception as e:
+            print(f"event sync error: {e}", file=sys.stderr, flush=True)
+        time.sleep(max(10, int(args.interval)))
 
 
 if __name__ == "__main__":
