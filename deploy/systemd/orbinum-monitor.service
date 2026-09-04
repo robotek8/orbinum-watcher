@@ -1,0 +1,9 @@
+[Unit]
+Description=Orbinum Validator Uptime Monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/orbinum-monitor.env
+ExecStart=/usr/bin/python3 /opt/orbinum-monitor/monitor.py
