@@ -7,9 +7,13 @@ Independent external monitoring for an Orbinum Testnet validator.
 
 Orbinum Watcher continuously checks validator telemetry from outside the validator host, stores historical samples, calculates uptime and incident statistics, exposes a public status dashboard, and sends private Telegram alerts when the validator goes offline or recovers.
 
+It also includes a passive Windows-side telemetry pipeline that observes validator and host load, detects sustained anomalies, groups them into stress events, and synchronizes compact event summaries to the VPS for the public Incident history.
+
 > Community-built monitoring tooling. This repository is not an official Orbinum project.
 
 ## What it monitors
+
+External uptime monitoring:
 
 - Validator reachability
 - Connected peer count
@@ -19,7 +23,18 @@ Orbinum Watcher continuously checks validator telemetry from outside the validat
 - 24h / 7d / 30d / all-time uptime
 - Incident start, recovery and duration
 
-The collector currently samples every 60 seconds.
+Passive validator-host telemetry:
+
+- Validator container CPU and memory usage
+- Host CPU and memory usage
+- Peer drops and low-peer periods
+- Finality gap and sync lag
+- Best/finalized block progression stalls
+- Metrics latency degradation
+- Container restart/down signals
+- Validator network and disk I/O deltas
+
+The external collector currently samples every 60 seconds. Windows-side passive telemetry is collected independently at a shorter interval and does not control the validator.
 
 ## Architecture
 
@@ -33,7 +48,7 @@ private reverse SSH tunnel
         v
 VPS :19615 (loopback only)
         |
-        +--> collector --> SQLite history
+        +--> collector --> SQLite uptime history
         |                    |
         |                    +--> Telegram alert bot
         |                    |
@@ -44,9 +59,30 @@ VPS :19615 (loopback only)
                                          |
                                          v
                               orbinum-watcher.xyz
+
+Windows validator host
+        |
+        +--> passive telemetry agent
+                 |
+                 +--> local SQLite telemetry history
+                 |
+                 +--> anomaly detector
+                 |
+                 +--> grouped stress-event report
+                 |
+                 v
+          isolated SFTP-only account
+                 |
+                 v
+          VPS events.json snapshot
+                 |
+                 v
+          dashboard Incident history
 ```
 
-The public dashboard never talks directly to the validator. It reads the monitoring database on the VPS. Prometheus metrics remain private and are transported through an SSH tunnel.
+The public dashboard never talks directly to the validator. Prometheus metrics remain private and are transported through an SSH tunnel. Stress-event transport uses a separate SFTP-only account so the validator P2P tunnel does not need shell or file-transfer permissions.
+
+The local telemetry database remains the source of truth for passive host observations. Only compact event summaries are synchronized to the VPS.
 
 ## Components
 
@@ -80,9 +116,39 @@ Commands:
 
 It also sends automatic offline, degraded and recovery notifications.
 
+### `agent/windows_telemetry.py`
+
+Passive Windows telemetry collector. It reads Docker stats, Docker inspect state, validator Prometheus metrics and basic host CPU/RAM statistics into a local SQLite database.
+
+It does not restart, stop or reconfigure the validator, Docker or SSH tunnels.
+
+### `analysis/anomaly_detector.py`
+
+Read-only anomaly detector for stored telemetry. It detects sustained CPU/RAM load, peer loss, finality/sync lag, block stalls, metrics degradation, container down state and restarts.
+
+### `analysis/stress_event_report.py`
+
+Groups nearby anomaly signals into higher-level stress events and calculates useful event context such as peak CPU, minimum peers, maximum finality/sync gap, block advancement, restarts, network I/O and disk I/O.
+
+### `agent/windows_event_sync.py`
+
+Builds compact stress-event snapshots from the local telemetry database and uploads them through the dedicated SFTP-only account using an atomic temporary-file rename.
+
+The sync path is independent from the validator P2P reverse tunnel.
+
 ### `web.py`
 
-Small read-only HTTP dashboard. It shows current validator state, uptime windows, a 24-hour availability timeline and incident history.
+Small read-only HTTP dashboard. It shows current validator state, uptime windows, a 24-hour availability timeline and Incident history.
+
+The deployed Incident history merges externally observed downtime with passive stress/load events such as finality lag, peer drop, block stall and validator restart. Detailed stress metrics are expandable per event.
+
+### `tests/synthetic_replay.py`
+
+Synthetic replay scenarios for the anomaly detector. Healthy data is expected to produce no events, while injected CPU bursts, finality lag, sync lag, peer collapse, block stalls, telemetry failures and restarts must be detected.
+
+### `tests/stress_event_report_replay.py`
+
+Synthetic validation for grouping anomaly signals into higher-level stress events and recovery summaries.
 
 ### `Dockerfile`
 
@@ -90,7 +156,7 @@ Runs the public dashboard as an isolated container. The SQLite monitoring direct
 
 ## Status model
 
-Current health is derived from externally observed telemetry:
+Current public availability is derived from externally observed telemetry:
 
 ```text
 ONLINE
@@ -106,7 +172,7 @@ OFFLINE
   metrics unavailable or monitoring data becomes stale
 ```
 
-Block-progression / stall detection is planned as an additional health signal.
+Passive stress-event analysis is complementary to uptime monitoring. A host-side load event does not automatically mean downtime; the event report records what changed and whether block/finality progression continued or recovered without a validator restart.
 
 ## Uptime semantics
 
@@ -132,6 +198,26 @@ Metrics: http://127.0.0.1:19615/metrics
 Database: /var/lib/orbinum-monitor/uptime.db
 ```
 
+### Passive Windows telemetry
+
+```powershell
+python C:\OrbinumWatcher\windows_telemetry.py --once --no-write
+python C:\OrbinumWatcher\analysis\anomaly_detector.py --seconds 900
+python C:\OrbinumWatcher\analysis\stress_event_report.py
+```
+
+Event synchronization:
+
+```powershell
+python C:\OrbinumWatcher\windows_event_sync.py --upload
+```
+
+Continuous synchronization can run separately from the telemetry collector:
+
+```powershell
+python C:\OrbinumWatcher\windows_event_sync.py --upload --loop --interval 30 --quiet
+```
+
 ### Web
 
 ```bash
@@ -145,6 +231,12 @@ Health endpoint:
 
 ```bash
 curl http://127.0.0.1:8787/health
+```
+
+Status endpoint:
+
+```bash
+curl http://127.0.0.1:8787/api/status
 ```
 
 ### Docker dashboard
@@ -181,6 +273,9 @@ The live deployment uses:
 - private reverse SSH tunnel for metrics
 - Python collector + SQLite on a VPS
 - systemd timer at 60-second cadence
+- passive Windows telemetry with local SQLite history
+- read-only anomaly/stress analysis
+- isolated SFTP-only stress-event synchronization
 - private Telegram bot
 - Dockerized web dashboard
 - Caddy reverse proxy with automatic HTTPS
@@ -192,9 +287,12 @@ See [ROADMAP.md](ROADMAP.md).
 ## Security
 
 - Prometheus metrics are not exposed publicly.
-- The public dashboard only receives read-only access to monitoring history.
+- The public dashboard only receives read-only access to monitoring history and synchronized event summaries.
+- The SFTP event-sync account has no shell and no TCP forwarding.
+- Validator P2P tunneling and stress-event transport use separate accounts.
 - Telegram credentials live outside the repository.
 - The monitoring stack does not submit transactions or modify validator state.
+- Passive telemetry and analysis do not stop, restart or reconfigure the validator.
 
 ## License
 
