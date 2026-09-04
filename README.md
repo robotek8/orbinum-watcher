@@ -142,6 +142,8 @@ Small read-only HTTP dashboard. It shows current validator state, uptime windows
 
 The deployed Incident history merges externally observed downtime with passive stress/load events such as finality lag, peer drop, block stall and validator restart. Detailed stress metrics are expandable per event.
 
+The production Incident history uses a compact five-column layout with event metrics rendered below the event row, avoiding horizontal scrolling on the normal dashboard width.
+
 ### `tests/synthetic_replay.py`
 
 Synthetic replay scenarios for the anomaly detector. Healthy data is expected to produce no events, while injected CPU bursts, finality lag, sync lag, peer collapse, block stalls, telemetry failures and restarts must be detected.
@@ -279,6 +281,8 @@ The live deployment uses:
 - private Telegram bot
 - Dockerized web dashboard
 - Caddy reverse proxy with automatic HTTPS
+
+The complete stress-event path has been validated end to end with a controlled synthetic `Finality lag` event: local event data reached the VPS snapshot, appeared through `/api/status`, rendered in public Incident history with expandable metrics, and was then removed by restoring the real event snapshot. The validator and its reverse tunnels were not restarted for this test.
 
 ## Roadmap
 
