@@ -1,0 +1,14 @@
+[Unit]
+Description=Orbinum Validator Telegram Monitor
+After=network-online.target orbinum-monitor.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/orbinum-monitor.env
+ExecStart=/usr/bin/python3 /opt/orbinum-monitor/bot.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
