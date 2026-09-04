@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.db
+*.sqlite
+*.sqlite3
+.env
+*.env
+bot_chat_id
+bot_state.json
+.DS_Store
+.vscode/
+.idea/
