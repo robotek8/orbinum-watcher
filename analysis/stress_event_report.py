@@ -14,6 +14,7 @@ import argparse
 import importlib.util
 import json
 import sqlite3
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ spec = importlib.util.spec_from_file_location("anomaly_detector", DETECTOR_PATH)
 if spec is None or spec.loader is None:
     raise RuntimeError("cannot load anomaly detector")
 detector = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = detector
 spec.loader.exec_module(detector)
 
 STRESS_KINDS = {
