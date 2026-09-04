@@ -14,12 +14,28 @@
 
 ## v0.2 — Validator health engine
 
-- [ ] Best block progression checks
-- [ ] Finalization progression checks
-- [ ] Stalled-chain detection
+- [x] Best block progression checks
+- [x] Finalization progression checks
+- [x] Stalled-chain detection
 - [ ] Configurable degraded thresholds
 - [ ] Alert deduplication / cooldowns
-- [ ] Incident reason classification
+- [x] Incident reason classification
+
+## v0.25 — Passive stress observability
+
+- [x] Passive Windows validator telemetry agent
+- [x] Local telemetry SQLite history
+- [x] Container CPU / RAM / I/O observation
+- [x] Host CPU / RAM observation
+- [x] Peer-drop and low-peer detection
+- [x] Finality-gap and sync-lag detection
+- [x] Validator restart/down detection
+- [x] Synthetic anomaly replay tests
+- [x] Grouped stress-event reports
+- [x] Isolated SFTP-only event synchronization
+- [x] Atomic event snapshot upload
+- [x] Stress/load events merged into dashboard Incident history
+- [x] Expandable event metrics and recovery context
 
 ## v0.3 — Better observability
 
@@ -28,7 +44,7 @@
 - [ ] Block-lag chart
 - [ ] Daily / weekly uptime summaries
 - [ ] CSV / JSON export
-- [ ] `/api/status` endpoint
+- [x] `/api/status` endpoint
 
 ## v0.4 — Operational hardening
 
@@ -36,7 +52,7 @@
 - [ ] Automated backup
 - [ ] Structured logs
 - [ ] Health checks for collector and Telegram bot
-- [ ] Docker Compose example
+- [x] Docker Compose example
 - [ ] systemd unit examples
 
 ## v1.0
