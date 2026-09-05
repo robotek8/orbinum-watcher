@@ -51,7 +51,7 @@ try {
         Start-ScheduledTask -TaskName $taskName
         Start-Sleep -Seconds 2
         $task = Get-ScheduledTask -TaskName $taskName
-        Write-Host "Task $taskName: $($task.State)"
+        Write-Host ("Task {0}: {1}" -f $taskName, $task.State)
     }
     else {
         Write-Warning "Scheduled task '$taskName' was not found; files were updated but the running sync process was not restarted."
