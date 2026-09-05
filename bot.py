@@ -11,6 +11,7 @@ from datetime import datetime, timezone, timedelta
 DB = os.getenv("ORBINUM_DB", "/var/lib/orbinum-monitor/uptime.db")
 OWNER_FILE = os.getenv("ORBINUM_BOT_OWNER_FILE", "/var/lib/orbinum-monitor/bot_chat_id")
 STATE_FILE = os.getenv("ORBINUM_BOT_STATE_FILE", "/var/lib/orbinum-monitor/bot_state.json")
+EVENTS_FILE = os.getenv("ORBINUM_EVENTS_FILE", "/var/lib/orbinum-monitor/events.json")
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 PAIR_CODE = os.environ["TELEGRAM_PAIR_CODE"]
@@ -62,6 +63,15 @@ def load_state():
 def save_state(state):
     with open(STATE_FILE, "w", encoding="utf-8") as file:
         json.dump(state, file)
+
+
+def load_event_snapshot():
+    try:
+        with open(EVENTS_FILE, "r", encoding="utf-8") as file:
+            value = json.load(file)
+        return value if isinstance(value, dict) else None
+    except Exception:
+        return None
 
 
 def fmt_time(ts):
@@ -137,6 +147,85 @@ def current_state():
     return "offline", row
 
 
+def latest_diagnostic(max_source_age=180):
+    snapshot = load_event_snapshot()
+    if not snapshot:
+        return None
+
+    now = int(time.time())
+    source_ts = snapshot.get("source_latest_ts")
+    source_age = snapshot.get("source_sample_age_s")
+    if not isinstance(source_age, int) and isinstance(source_ts, int):
+        source_age = max(0, now - source_ts)
+    if isinstance(source_age, int) and source_age > max_source_age:
+        return None
+
+    events = snapshot.get("events")
+    if not isinstance(events, list):
+        return None
+    candidates = [event for event in events if isinstance(event, dict)]
+    if not candidates:
+        return None
+
+    candidates.sort(
+        key=lambda event: int(event.get("ended") or event.get("started") or 0),
+        reverse=True,
+    )
+    event = candidates[0].copy()
+    event["source_age_s"] = source_age
+    return event
+
+
+def diagnostic_hint():
+    event = latest_diagnostic()
+    if not event:
+        return None
+    event_type = str(event.get("type") or "")
+    if event_type == "Docker engine unavailable":
+        return "Docker Engine unavailable on Windows host"
+    if event_type == "Validator restart":
+        return "validator container restart detected"
+    if event_type == "Node offline":
+        return "validator container reported offline locally"
+    if event_type == "Block stall":
+        return "best block stalled locally"
+    return None
+
+
+def diagnostics_text():
+    snapshot = load_event_snapshot()
+    if not snapshot:
+        return "🧭 LOCAL DIAGNOSTICS\n\nNo Windows diagnostic snapshot is available yet."
+
+    now = int(time.time())
+    source_ts = snapshot.get("source_latest_ts")
+    source_age = snapshot.get("source_sample_age_s")
+    if not isinstance(source_age, int) and isinstance(source_ts, int):
+        source_age = max(0, now - source_ts)
+
+    events = [event for event in snapshot.get("events", []) if isinstance(event, dict)]
+    events.sort(
+        key=lambda event: int(event.get("ended") or event.get("started") or 0),
+        reverse=True,
+    )
+
+    text = "🧭 LOCAL DIAGNOSTICS\n\n"
+    text += f"Telemetry age: {source_age if source_age is not None else '—'}s\n"
+    if not events:
+        return text + "Latest event: none"
+
+    event = events[0]
+    kinds = ", ".join(event.get("kinds") or []) or "—"
+    text += (
+        f"Latest event: {event.get('type') or 'Load event'}\n"
+        f"Status: {event.get('status') or '—'}\n"
+        f"Severity: {str(event.get('severity') or '—').upper()}\n"
+        f"Started: {fmt_time(event.get('started'))} UTC+5\n"
+        f"Signals: {kinds}"
+    )
+    return text
+
+
 def status_text():
     state, row = current_state()
     icons = {"online": "🟢", "degraded": "🟠", "offline": "🔴"}
@@ -152,7 +241,7 @@ def status_text():
     def uptime(data):
         return f"{data['uptime']:.3f}%" if data else "—"
 
-    return (
+    text = (
         f"{icons[state]} {VALIDATOR_NAME}\n\n"
         f"Status: {state.upper()}\n"
         f"Peers: {peers if peers is not None else '—'}\n"
@@ -165,6 +254,10 @@ def status_text():
         f"Last sample: {fmt_time(ts)} UTC+5\n"
         f"Sample age: {int(time.time()) - ts}s"
     )
+    hint = diagnostic_hint()
+    if hint:
+        text += f"\nLocal diagnostic: {hint}"
+    return text
 
 
 def uptime_text():
@@ -248,7 +341,7 @@ def handle_message(message):
             return
 
         save_owner(chat_id)
-        send(chat_id, "✅ Orbinum Validator Monitor paired.\n\nCommands:\n/status\n/uptime\n/incidents")
+        send(chat_id, "✅ Orbinum Validator Monitor paired.\n\nCommands:\n/status\n/uptime\n/incidents\n/diag")
         print("Paired with chat:", chat_id, flush=True)
         return
 
@@ -261,15 +354,17 @@ def handle_message(message):
         return
 
     if text in ("/start", "/help"):
-        send(chat_id, "🛰 Orbinum Validator Monitor\n\n/status — current validator state\n/uptime — uptime statistics\n/incidents — recent outages")
+        send(chat_id, "🛰 Orbinum Validator Monitor\n\n/status — current validator state\n/uptime — uptime statistics\n/incidents — recent outages\n/diag — latest Windows/Docker diagnostic")
     elif text == "/status":
         send(chat_id, status_text())
     elif text == "/uptime":
         send(chat_id, uptime_text())
     elif text == "/incidents":
         send(chat_id, incidents_text())
+    elif text in ("/diag", "/diagnostics"):
+        send(chat_id, diagnostics_text())
     else:
-        send(chat_id, "Commands:\n/status\n/uptime\n/incidents")
+        send(chat_id, "Commands:\n/status\n/uptime\n/incidents\n/diag")
 
 
 def check_alerts():
@@ -306,6 +401,9 @@ def check_alerts():
             )
             if error:
                 text += f"\nError: {error}"
+            hint = diagnostic_hint()
+            if hint:
+                text += f"\nLikely cause: {hint}"
         else:
             text = "🔴 ORBINUM VALIDATOR OFFLINE\n\nMonitoring data unavailable."
         send(owner, text)
@@ -347,6 +445,46 @@ def check_alerts():
     save_state(state)
 
 
+def check_diagnostic_alerts():
+    owner = load_owner()
+    if owner is None:
+        return
+
+    event = latest_diagnostic()
+    if not event or event.get("type") != "Docker engine unavailable":
+        return
+
+    event_id = str(event.get("id") or f"docker-{event.get('started')}")
+    event_status = str(event.get("status") or "Open")
+    state = load_state()
+    previous_id = state.get("diagnostic_event_id")
+    previous_status = state.get("diagnostic_event_status")
+
+    if event_id == previous_id and event_status == previous_status:
+        return
+
+    if event_status == "Open":
+        send(
+            owner,
+            "🐳 DOCKER ENGINE UNAVAILABLE\n\n"
+            f"Detected by Windows telemetry: {fmt_time(event.get('started'))} UTC+5\n"
+            "Docker stats/inspect cannot reach the engine.\n"
+            "The validator container may be unavailable because Docker Desktop/WSL backend is down.\n\n"
+            "No automatic restart was attempted.",
+        )
+    elif previous_id == event_id and previous_status == "Open":
+        send(
+            owner,
+            "🐳 DOCKER ENGINE RECOVERED\n\n"
+            "Windows telemetry can reach Docker again.\n"
+            "Validator recovery is tracked separately by the external uptime monitor.",
+        )
+
+    state["diagnostic_event_id"] = event_id
+    state["diagnostic_event_status"] = event_status
+    save_state(state)
+
+
 def main():
     print("Orbinum Telegram bot started", flush=True)
     offset = 0
@@ -362,6 +500,7 @@ def main():
                     handle_message(message)
 
             check_alerts()
+            check_diagnostic_alerts()
 
         except Exception as exc:
             print("Bot loop error:", exc, flush=True)
