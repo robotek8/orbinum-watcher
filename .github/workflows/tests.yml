@@ -1,0 +1,32 @@
+name: Orbinum Watcher tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  passive-detector:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile Python modules
+        run: |
+          python -m py_compile \
+            bot.py \
+            agent/windows_telemetry.py \
+            agent/windows_event_sync.py \
+            analysis/anomaly_detector.py \
+            analysis/stress_event_report.py \
+            tests/synthetic_replay.py \
+            tests/stress_event_report_replay.py
+      - name: Synthetic anomaly replay
+        run: python tests/synthetic_replay.py
+      - name: Stress-event replay
+        run: python tests/stress_event_report_replay.py
