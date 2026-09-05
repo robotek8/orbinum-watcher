@@ -102,6 +102,48 @@ def scenario_metrics_failure():
     return rows
 
 
+def scenario_docker_engine_down():
+    rows = []
+    engine_error = (
+        "metrics: <urlopen error [WinError 10061]> | "
+        "docker stats: error during connect: open //./pipe/dockerDesktopLinuxEngine: "
+        "The system cannot find the file specified. | "
+        "docker inspect: error during connect: open //./pipe/dockerDesktopLinuxEngine: "
+        "The system cannot find the file specified."
+    )
+    for ts in range(0, 61, 5):
+        if 20 <= ts <= 40:
+            rows.append(row(
+                ts,
+                error=engine_error,
+                best=None,
+                finalized=None,
+                sync_target=None,
+                peers=None,
+                metrics_latency_ms=None,
+                container_cpu_pct=None,
+                container_mem_pct=None,
+                container_status=None,
+                container_running=None,
+                finality_gap=None,
+                sync_gap=None,
+            ))
+        else:
+            rows.append(row(ts))
+    return rows
+
+
+def scenario_container_missing():
+    rows = []
+    missing_error = (
+        "docker stats: Error response from daemon: No such container: orbinum-validator | "
+        "docker inspect: Error: No such object: orbinum-validator"
+    )
+    for ts in range(0, 31, 5):
+        rows.append(row(ts, error=missing_error if ts >= 10 else None))
+    return rows
+
+
 def scenario_restart():
     rows = [row(ts) for ts in range(0, 61, 5)]
     for r in rows:
@@ -139,6 +181,7 @@ def main():
         "block_stall",
         "container_restart",
         "telemetry_error",
+        "docker_engine_unavailable",
     })
     require("cpu burst", scenario_cpu_burst(), {"container_cpu_high"})
     require("finality lag", scenario_finality_lag(), {"finality_gap"})
@@ -146,6 +189,8 @@ def main():
     require("peer collapse", scenario_peer_collapse(), {"peers_low", "peer_drop"})
     require("block stall", scenario_block_stall(), {"block_stall"})
     require("metrics failure", scenario_metrics_failure(), {"telemetry_error"})
+    require("docker engine down", scenario_docker_engine_down(), {"docker_engine_unavailable", "telemetry_error"})
+    require("container missing", scenario_container_missing(), {"telemetry_error"}, {"docker_engine_unavailable"})
     require("restart", scenario_restart(), {"container_restart"})
     print("\nALL SYNTHETIC REPLAY TESTS PASSED")
 
