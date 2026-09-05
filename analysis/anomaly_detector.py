@@ -41,6 +41,7 @@ class Thresholds:
     metrics_latency_seconds: int = 20
     container_mem_pct: float = 80.0
     container_mem_seconds: int = 30
+    docker_engine_down_seconds: int = 10
 
 
 @dataclass
@@ -60,6 +61,36 @@ def _num(v: Any) -> float | None:
     if isinstance(v, (int, float)):
         return float(v)
     return None
+
+
+def _docker_engine_unavailable(row: dict[str, Any]) -> bool:
+    """Recognize Docker Desktop/engine transport failure without confusing it
+    with a missing validator container.
+
+    windows_telemetry records both docker stats and docker inspect failures in
+    one error string. A stopped Docker Desktop / WSL backend usually surfaces as
+    a named-pipe, daemon-connect or engine API failure. A plain "no such
+    container" is intentionally excluded because that is a different fault.
+    """
+    error = str(row.get("error") or "").lower()
+    if not error or "docker stats:" not in error or "docker inspect:" not in error:
+        return False
+    if "no such container" in error or "no such object" in error:
+        return False
+
+    markers = (
+        "dockerdesktoplinuxengine",
+        "docker_engine",
+        "cannot connect to the docker daemon",
+        "is the docker daemon running",
+        "error during connect",
+        "the system cannot find the file specified",
+        "open //./pipe/",
+        "open \\\\.\\pipe\\",
+        "request returned internal server error",
+        "docker desktop",
+    )
+    return any(marker in error for marker in markers)
 
 
 def _duration_true(rows: list[dict[str, Any]], predicate) -> list[tuple[int, int, list[dict[str, Any]]]]:
@@ -107,6 +138,19 @@ def detect(rows: Iterable[dict[str, Any]], thresholds: Thresholds | None = None)
         return []
 
     events: list[Event] = []
+
+    # Docker Desktop / WSL backend failure is more useful than the generic
+    # telemetry_error it also causes. Keep both signals so event clustering can
+    # retain all evidence while the presentation layer chooses the root cause.
+    _emit_sustained(
+        events,
+        data,
+        _docker_engine_unavailable,
+        t.docker_engine_down_seconds,
+        "docker_engine_unavailable",
+        "critical",
+        lambda seg: "Docker Engine unavailable to Windows telemetry",
+    )
 
     # Any metrics error is kept as a short event; it is useful during real load
     # because the metrics endpoint may become slow/unavailable before the node dies.
