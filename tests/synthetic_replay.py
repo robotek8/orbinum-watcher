@@ -133,6 +133,41 @@ def scenario_docker_engine_down():
     return rows
 
 
+def scenario_docker_engine_timeout():
+    timeout_error = (
+        "metrics: <urlopen error [WinError 10061]> | "
+        "docker stats: Command ['docker', 'stats', 'orbinum-validator'] timed out after 4.0 seconds | "
+        "docker inspect: Command ['docker', 'inspect', 'orbinum-validator'] timed out after 3.0 seconds"
+    )
+    rows = [row(ts) for ts in (0, 5, 10, 15)]
+    for ts in (20, 29):
+        rows.append(row(
+            ts,
+            error=timeout_error,
+            best=None,
+            finalized=None,
+            sync_target=None,
+            peers=None,
+            metrics_latency_ms=None,
+            container_cpu_pct=None,
+            container_mem_pct=None,
+            container_status=None,
+            container_running=None,
+            finality_gap=None,
+            sync_gap=None,
+        ))
+    rows.extend(row(ts) for ts in (34, 39, 44))
+    return rows
+
+
+def scenario_single_docker_timeout():
+    timeout_error = (
+        "docker stats: Command ['docker', 'stats'] timed out after 4.0 seconds | "
+        "docker inspect: Command ['docker', 'inspect'] timed out after 3.0 seconds"
+    )
+    return [row(0), row(5, error=timeout_error), row(10)]
+
+
 def scenario_container_missing():
     rows = []
     missing_error = (
@@ -190,6 +225,8 @@ def main():
     require("block stall", scenario_block_stall(), {"block_stall"})
     require("metrics failure", scenario_metrics_failure(), {"telemetry_error"})
     require("docker engine down", scenario_docker_engine_down(), {"docker_engine_unavailable", "telemetry_error"})
+    require("docker engine timeout", scenario_docker_engine_timeout(), {"docker_engine_unavailable", "telemetry_error"})
+    require("single docker timeout", scenario_single_docker_timeout(), {"telemetry_error"}, {"docker_engine_unavailable"})
     require("container missing", scenario_container_missing(), {"telemetry_error"}, {"docker_engine_unavailable"})
     require("restart", scenario_restart(), {"container_restart"})
     print("\nALL SYNTHETIC REPLAY TESTS PASSED")
