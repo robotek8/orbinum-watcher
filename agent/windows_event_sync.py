@@ -70,6 +70,8 @@ def event_id(event: dict[str, Any]) -> str:
 
 def event_type(kinds: list[str]) -> str:
     s = set(kinds)
+    if "docker_engine_unavailable" in s:
+        return "Docker engine unavailable"
     if "container_down" in s:
         return "Node offline"
     if "container_restart" in s:
