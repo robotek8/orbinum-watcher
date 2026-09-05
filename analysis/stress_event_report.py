@@ -42,6 +42,7 @@ STRESS_KINDS = {
     "block_stall",
     "finality_stall",
     "telemetry_error",
+    "docker_engine_unavailable",
     "container_down",
     "container_restart",
 }
