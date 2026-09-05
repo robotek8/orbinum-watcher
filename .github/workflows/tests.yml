@@ -26,6 +26,25 @@ jobs:
             analysis/stress_event_report.py \
             tests/synthetic_replay.py \
             tests/stress_event_report_replay.py
+      - name: Parse PowerShell deployment scripts
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem deploy/windows -Filter '*.ps1' -File | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $failed = $true
+              Write-Host "PowerShell parse errors in $($_.FullName):"
+              $errors | ForEach-Object { Write-Error $_.Message }
+            }
+          }
+          if ($failed) { exit 1 }
       - name: Synthetic anomaly replay
         run: python tests/synthetic_replay.py
       - name: Stress-event replay
