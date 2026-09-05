@@ -41,7 +41,7 @@ class Thresholds:
     metrics_latency_seconds: int = 20
     container_mem_pct: float = 80.0
     container_mem_seconds: int = 30
-    docker_engine_down_seconds: int = 10
+    docker_engine_down_seconds: int = 5
 
 
 @dataclass
@@ -68,9 +68,10 @@ def _docker_engine_unavailable(row: dict[str, Any]) -> bool:
     with a missing validator container.
 
     windows_telemetry records both docker stats and docker inspect failures in
-    one error string. A stopped Docker Desktop / WSL backend usually surfaces as
-    a named-pipe, daemon-connect or engine API failure. A plain "no such
-    container" is intentionally excluded because that is a different fault.
+    one error string. A stopped or unresponsive Docker Desktop / WSL backend can
+    surface as named-pipe/daemon errors or as paired CLI timeouts. A plain
+    "no such container" is intentionally excluded because that is a different
+    fault.
     """
     error = str(row.get("error") or "").lower()
     if not error or "docker stats:" not in error or "docker inspect:" not in error:
@@ -89,6 +90,9 @@ def _docker_engine_unavailable(row: dict[str, Any]) -> bool:
         "open \\\\.\\pipe\\",
         "request returned internal server error",
         "docker desktop",
+        "timed out after",
+        "context deadline exceeded",
+        "deadline exceeded",
     )
     return any(marker in error for marker in markers)
 
